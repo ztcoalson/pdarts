@@ -109,7 +109,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, float(args.epochs))
     best_acc = 0.0
     for epoch in range(args.epochs):
-        logging.info('Epoch: %d lr %e', epoch, scheduler.get_lr()[0])
+        logging.info('Epoch: %d lr %e', epoch, scheduler.get_last_lr()[0])
         model.module.drop_path_prob = args.drop_path_prob * epoch / args.epochs
         model.drop_path_prob = args.drop_path_prob * epoch / args.epochs
         start_time = time.time()
@@ -120,7 +120,7 @@ def main():
         valid_acc, valid_obj = infer(valid_queue, model, criterion)
         if valid_acc > best_acc:
             best_acc = valid_acc
-        logging.info('Valid_acc: %f', valid_acc)
+        logging.info('Valid_acc: %f, Best_valid_acc: %f', valid_acc, best_acc)      # log best accuracy seen so far
         end_time = time.time()
         duration = end_time - start_time
         print('Epoch time: %ds.' % duration )
