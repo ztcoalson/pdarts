@@ -109,12 +109,12 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, float(args.epochs))
     best_acc = 0.0
     for epoch in range(args.epochs):
-        scheduler.step()
         logging.info('Epoch: %d lr %e', epoch, scheduler.get_lr()[0])
         model.module.drop_path_prob = args.drop_path_prob * epoch / args.epochs
         model.drop_path_prob = args.drop_path_prob * epoch / args.epochs
         start_time = time.time()
         train_acc, train_obj = train(train_queue, model, criterion, optimizer)
+        scheduler.step()
         logging.info('Train_acc: %f', train_acc)
 
         valid_acc, valid_obj = infer(valid_queue, model, criterion)

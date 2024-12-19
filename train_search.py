@@ -144,7 +144,6 @@ def main():
         eps_no_arch = eps_no_archs[sp]
         scale_factor = 0.2
         for epoch in range(epochs):
-            scheduler.step()
             lr = scheduler.get_lr()[0]
             logging.info('Epoch: %d lr: %e', epoch, lr)
             epoch_start = time.time()
@@ -157,6 +156,8 @@ def main():
                 model.module.p = float(drop_rate[sp]) * np.exp(-(epoch - eps_no_arch) * scale_factor) 
                 model.module.update_p()                
                 train_acc, train_obj = train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True)
+            scheduler.step()
+            
             logging.info('Train_acc %f', train_acc)
             epoch_duration = time.time() - epoch_start
             logging.info('Epoch time: %ds', epoch_duration)
