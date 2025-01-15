@@ -3,7 +3,7 @@ import sys
 import glob
 import numpy as np
 import torch
-import utils
+import pdarts_utils as pdarts_utils
 import logging
 import argparse
 import torch.nn as nn
@@ -49,17 +49,17 @@ def main():
   model = Network(args.init_channels, CIFAR_CLASSES, args.layers, args.auxiliary, genotype)
   model = model.cuda()
   try:
-    utils.load(model, args.model_path)
+    pdarts_utils.load(model, args.model_path)
   except:
     model = model.module
-    utils.load(model, args.model_path)
+    pdarts_utils.load(model, args.model_path)
 
-  logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+  logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
 
   criterion = nn.CrossEntropyLoss()
   criterion = criterion.cuda()
 
-  _, test_transform = utils._data_transforms_cifar10(args)
+  _, test_transform = pdarts_utils._data_transforms_cifar10(args)
   test_data = dset.CIFAR10(root=args.data, train=False, download=True, transform=test_transform)
 
   test_queue = torch.utils.data.DataLoader(
@@ -71,9 +71,9 @@ def main():
 
 
 def infer(test_queue, model, criterion):
-  objs = utils.AvgrageMeter()
-  top1 = utils.AvgrageMeter()
-  top5 = utils.AvgrageMeter()
+  objs = pdarts_utils.AvgrageMeter()
+  top1 = pdarts_utils.AvgrageMeter()
+  top5 = pdarts_utils.AvgrageMeter()
   model.eval()
 
   for step, (input, target) in enumerate(test_queue):
@@ -83,7 +83,7 @@ def infer(test_queue, model, criterion):
         logits, _ = model(input)
         loss = criterion(logits, target)
 
-    prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+    prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
     n = input.size(0)
     objs.update(loss.data.item(), n)
     top1.update(prec1.data.item(), n)

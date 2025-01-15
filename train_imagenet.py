@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import time
 import torch
-import utils
+import pdarts_utils as pdarts_utils
 import glob
 import random
 import logging
@@ -45,7 +45,7 @@ parser.add_argument('--note', type=str, default='try', help='note for this run')
 args, unparsed = parser.parse_known_args()
 
 args.save = '{}eval-{}-{}'.format(args.save, args.note, time.strftime("%Y%m%d-%H%M%S"))
-utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
+pdarts_utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
 
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
@@ -93,7 +93,7 @@ def main():
         model = model.cuda()
     else:
         model = model.cuda()
-    logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+    logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
 
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.cuda()
@@ -175,7 +175,7 @@ def main():
         if valid_acc_top1 > best_acc_top1:
             best_acc_top1 = valid_acc_top1
             is_best = True
-        utils.save_checkpoint({
+        pdarts_utils.save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': model.state_dict(),
             'best_acc_top1': best_acc_top1,
@@ -193,10 +193,10 @@ def adjust_lr(optimizer, epoch):
     return lr        
 
 def train(train_queue, model, criterion, optimizer):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
-    batch_time = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
+    top5 = pdarts_utils.AvgrageMeter()
+    batch_time = pdarts_utils.AvgrageMeter()
     model.train()
 
     for step, (input, target) in enumerate(train_queue):
@@ -214,7 +214,7 @@ def train(train_queue, model, criterion, optimizer):
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
         batch_time.update(time.time() - b_start)
-        prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+        prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
         n = input.size(0)
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)
@@ -235,9 +235,9 @@ def train(train_queue, model, criterion, optimizer):
 
 
 def infer(valid_queue, model, criterion):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
+    top5 = pdarts_utils.AvgrageMeter()
     model.eval()
 
     for step, (input, target) in enumerate(valid_queue):
@@ -247,7 +247,7 @@ def infer(valid_queue, model, criterion):
             logits, _ = model(input)
             loss = criterion(logits, target)
 
-        prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+        prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
         n = input.size(0)
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)

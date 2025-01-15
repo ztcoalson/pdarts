@@ -2,7 +2,7 @@ import os
 import sys
 import numpy as np
 import torch
-import utils
+import pdarts_utils as pdarts_utils
 import glob
 import random
 import logging
@@ -48,7 +48,7 @@ def main():
   model = model.cuda()
   model.load_state_dict(torch.load(args.model_path)['state_dict'])
 
-  logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+  logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
 
   criterion = nn.CrossEntropyLoss()
   criterion = criterion.cuda()
@@ -74,9 +74,9 @@ def main():
 
 
 def infer(valid_queue, model, criterion):
-  objs = utils.AvgrageMeter()
-  top1 = utils.AvgrageMeter()
-  top5 = utils.AvgrageMeter()
+  objs = pdarts_utils.AvgrageMeter()
+  top1 = pdarts_utils.AvgrageMeter()
+  top5 = pdarts_utils.AvgrageMeter()
   model.eval()
 
   for step, (input, target) in enumerate(valid_queue):
@@ -86,7 +86,7 @@ def infer(valid_queue, model, criterion):
       logits, _ = model(input)
       loss = criterion(logits, target)
 
-    prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+    prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
     n = input.size(0)
     objs.update(loss.data.item(), n)
     top1.update(prec1.data.item(), n)

@@ -4,7 +4,7 @@ import time
 import glob
 import numpy as np
 import torch
-import utils
+import pdarts_utils as pdarts_utils
 import logging
 import argparse
 import torch.nn as nn
@@ -43,7 +43,7 @@ parser.add_argument('--cifar100', action='store_true', default=False, help='if u
 args, unparsed = parser.parse_known_args()
 
 args.save = '{}eval-{}-{}'.format(args.save, args.note, time.strftime("%Y%m%d-%H%M%S"))
-utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
+pdarts_utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
 
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
@@ -79,7 +79,7 @@ def main():
     model = Network(args.init_channels, CIFAR_CLASSES, args.layers, args.auxiliary, genotype)
     model = torch.nn.DataParallel(model)
     model = model.cuda()
-    logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+    logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
 
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.cuda()
@@ -91,9 +91,9 @@ def main():
         )
 
     if args.cifar100:
-        train_transform, valid_transform = utils._data_transforms_cifar100(args)
+        train_transform, valid_transform = pdarts_utils._data_transforms_cifar100(args)
     else:
-        train_transform, valid_transform = utils._data_transforms_cifar10(args)
+        train_transform, valid_transform = pdarts_utils._data_transforms_cifar10(args)
     if args.cifar100:
         train_data = dset.CIFAR100(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
         valid_data = dset.CIFAR100(root=args.tmp_data_dir, train=False, download=True, transform=valid_transform)
@@ -124,11 +124,11 @@ def main():
         end_time = time.time()
         duration = end_time - start_time
         print('Epoch time: %ds.' % duration )
-        utils.save(model.module, os.path.join(args.save, 'weights.pt'))
+        pdarts_utils.save(model.module, os.path.join(args.save, 'weights.pt'))
 
 def train(train_queue, model, criterion, optimizer):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
     model.train()
 
     for step, (input, target) in enumerate(train_queue):
@@ -145,7 +145,7 @@ def train(train_queue, model, criterion, optimizer):
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
 
-        prec1, _ = utils.accuracy(logits, target, topk=(1,5))
+        prec1, _ = pdarts_utils.accuracy(logits, target, topk=(1,5))
         n = input.size(0)
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)
@@ -157,8 +157,8 @@ def train(train_queue, model, criterion, optimizer):
 
 
 def infer(valid_queue, model, criterion):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
     model.eval()
 
     for step, (input, target) in enumerate(valid_queue):
@@ -168,7 +168,7 @@ def infer(valid_queue, model, criterion):
             logits, _ = model(input)
             loss = criterion(logits, target)
 
-        prec1, _ = utils.accuracy(logits, target, topk=(1,5))
+        prec1, _ = pdarts_utils.accuracy(logits, target, topk=(1,5))
         n = input.size(0)
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)

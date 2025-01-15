@@ -4,19 +4,23 @@ import time
 import glob
 import numpy as np
 import torch
-import utils
+import pdarts_utils as pdarts_utils
 import logging
 import argparse
 import torch.nn as nn
 import torch.utils
 import torch.nn.functional as F
 import torchvision.datasets as dset
+import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 import copy
 from model_search import Network
 from genotypes import PRIMITIVES
 from genotypes import Genotype
 
+sys.path.append("../poisons/")
+from poisons import LabelFlippingPoisoningDataset, CleanLabelPoisoningDataset
+from poisons_utils import imshow
 
 parser = argparse.ArgumentParser("cifar")
 parser.add_argument('--workers', type=int, default=2, help='number of workers to load dataset')
@@ -44,18 +48,13 @@ parser.add_argument('--dropout_rate', action='append', default=[], help='dropout
 parser.add_argument('--add_width', action='append', default=['0'], help='add channels')
 parser.add_argument('--add_layers', action='append', default=['0'], help='add layers')
 parser.add_argument('--cifar100', action='store_true', default=False, help='search with cifar100 dataset')
+parser.add_argument('--save_full_model', action='store_true', default=False, help='save the entire supernet (used for crafting poisons)')
+
+### new attack args
+parser.add_argument('--poisons_type', type=str, choices=['label_flip', 'clean_label', 'none'], default='none')
+parser.add_argument('--poisons_path', type=str, default=None)
 
 args = parser.parse_args()
-
-args.save = '{}search-{}-{}'.format(args.save, args.note, time.strftime("%Y%m%d-%H%M%S"))
-utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
-
-log_format = '%(asctime)s %(message)s'
-logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-    format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
-fh.setFormatter(logging.Formatter(log_format))
-logging.getLogger().addHandler(fh)
 
 if args.cifar100:
     CIFAR_CLASSES = 100
@@ -63,25 +62,73 @@ if args.cifar100:
 else:
     CIFAR_CLASSES = 10
     data_folder = 'cifar-10-batches-py'
+
+CIFAR_MEAN = [0.49139968, 0.48215827, 0.44653124]
+CIFAR_STD = [0.24703233, 0.24348505, 0.26158768]
+
 def main():
     if not torch.cuda.is_available():
-        logging.info('No GPU device available')
+        print('No GPU device available')
         sys.exit(1)
+    
     np.random.seed(args.seed)
     cudnn.benchmark = True
     torch.manual_seed(args.seed)
     cudnn.enabled=True
     torch.cuda.manual_seed(args.seed)
-    logging.info("args = %s", args)
+    
+    if args.cifar100:
+        train_transform, _ = pdarts_utils._data_transforms_cifar100(args)
+    else:
+        train_transform, _ = pdarts_utils._data_transforms_cifar10(args)
+
     #  prepare dataset
-    if args.cifar100:
-        train_transform, valid_transform = utils._data_transforms_cifar100(args)
+    if args.poisons_type == 'none':
+        if args.cifar100:
+            train_data = dset.CIFAR100(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        else:
+            train_data = dset.CIFAR10(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        
+        n_poisons = 0
     else:
-        train_transform, valid_transform = utils._data_transforms_cifar10(args)
-    if args.cifar100:
-        train_data = dset.CIFAR100(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        if args.cifar100:
+            raise ValueError('CIFAR100 not supported for poisoning')
+
+        train_kwargs = {
+            'root': args.tmp_data_dir,
+            'train': True,
+            'download': True,
+            'transform': None
+        }
+        # train_data = dset.CIFAR10(root=args.tmp_data_dir, train=True, download=True, transform=None)
+
+        # Build poisoned dataset
+        if args.poisons_type == 'label_flip':
+            train_data = LabelFlippingPoisoningDataset(args.poisons_path, train_transform, train_kwargs)
+        elif args.poisons_type == 'clean_label':
+            train_data = CleanLabelPoisoningDataset(args.poisons_path, train_transform, train_kwargs)
+        else:
+            raise ValueError('Unknown poisons type: {}'.format(args.poisons_type))
+        
+        n_poisons = train_data.get_num_poisons()
+
+    # make save directory
+    if n_poisons > 0:  
+        args.save = '{}search-{}-{:.1f}%-{}'.format(args.save, args.note, 
+                                                    n_poisons / len(train_data) * 100, 
+                                                    time.strftime("%Y%m%d-%H%M%S"))
     else:
-        train_data = dset.CIFAR10(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        args.save = '{}search-{}-{}'.format(args.save, args.note, 
+                                            time.strftime("%Y%m%d-%H%M%S"))
+    pdarts_utils.create_exp_dir(args.save)
+
+    log_format = '%(asctime)s %(message)s'
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+        format=log_format, datefmt='%m/%d %I:%M:%S %p')
+    fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
+    fh.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(fh)
+    logging.info("args = %s", args)
 
     num_train = len(train_data)
     indices = list(range(num_train))
@@ -96,7 +143,7 @@ def main():
         train_data, batch_size=args.batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
         pin_memory=True, num_workers=args.workers)
-    
+
     # build Network
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.cuda()
@@ -125,7 +172,7 @@ def main():
         model = Network(args.init_channels + int(add_width[sp]), CIFAR_CLASSES, args.layers + int(add_layers[sp]), criterion, switches_normal=switches_normal, switches_reduce=switches_reduce, p=float(drop_rate[sp]))
         model = nn.DataParallel(model)
         model = model.cuda()
-        logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+        logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
         network_params = []
         for k, v in model.named_parameters():
             if not (k.endswith('alphas_normal') or k.endswith('alphas_reduce')):
@@ -144,7 +191,7 @@ def main():
         eps_no_arch = eps_no_archs[sp]
         scale_factor = 0.2
         for epoch in range(epochs):
-            lr = scheduler.get_lr()[0]
+            lr = scheduler.get_last_lr()[0]
             logging.info('Epoch: %d lr: %e', epoch, lr)
             epoch_start = time.time()
             # training
@@ -165,7 +212,12 @@ def main():
             if epochs - epoch < 5:
                 valid_acc, valid_obj = infer(valid_queue, model, criterion)
                 logging.info('Valid_acc %f', valid_acc)
-        utils.save(model, os.path.join(args.save, 'weights.pt'))
+        pdarts_utils.save(model, os.path.join(args.save, 'weights.pt'))
+
+        if args.save_full_model:
+            model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
+            torch.save(model_to_save, os.path.join(args.save, f'model-{sp}.pt'))
+
         print('------Dropping %d paths------' % num_to_drop[sp])
         # Save switches info for s-c refinement. 
         if sp == len(num_to_keep) - 1:
@@ -263,9 +315,9 @@ def main():
                 logging.info(genotype)              
 
 def train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
+    top5 = pdarts_utils.AvgrageMeter()
     
     for step, (input, target) in enumerate(train_queue):
         model.train()
@@ -297,7 +349,7 @@ def train(train_queue, valid_queue, model, network_params, criterion, optimizer,
         nn.utils.clip_grad_norm_(network_params, args.grad_clip)
         optimizer.step()
 
-        prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+        prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)
         top5.update(prec5.data.item(), n)
@@ -309,9 +361,9 @@ def train(train_queue, valid_queue, model, network_params, criterion, optimizer,
 
 
 def infer(valid_queue, model, criterion):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
+    objs = pdarts_utils.AvgrageMeter()
+    top1 = pdarts_utils.AvgrageMeter()
+    top5 = pdarts_utils.AvgrageMeter()
     model.eval()
 
     for step, (input, target) in enumerate(valid_queue):
@@ -321,7 +373,7 @@ def infer(valid_queue, model, criterion):
             logits = model(input)
             loss = criterion(logits, target)
 
-        prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+        prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
         n = input.size(0)
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)
