@@ -15,5 +15,5 @@ python train_cifar.py \
        --auxiliary \
        --cutout \
        --save ./results/ \
-       --note robot-noise4-50% \
-       --arch ROBOT_NOISE_50P_4
+       --note random4 \
+       --arch RANDOM_4
