@@ -47,24 +47,31 @@ parser.add_argument('--note', type=str, default='try', help='note for this run')
 parser.add_argument('--dropout_rate', action='append', default=[], help='dropout rate of skip connect')
 parser.add_argument('--add_width', action='append', default=['0'], help='add channels')
 parser.add_argument('--add_layers', action='append', default=['0'], help='add layers')
-parser.add_argument('--cifar100', action='store_true', default=False, help='search with cifar100 dataset')
+parser.add_argument('--dset', type=str, default='cifar10', choices=['cifar10', 'cifar100', 'mnist', 'svhn', 'fashion_mnist'], help='search with cifar100 dataset')
 parser.add_argument('--save_full_model', action='store_true', default=False, help='save the entire supernet (used for crafting poisons)')
+parser.add_argument('--anti_search', action='store_true', default=False, help='negate searching objective for arch. params')
+parser.add_argument('--track_grads', action='store_true', default=False, help='track gradients of arch. and network params')
 
 ### new attack args
-parser.add_argument('--poisons_type', type=str, choices=['label_flip', 'clean_label', 'none'], default='none')
+parser.add_argument('--poisons_type', type=str, choices=['label_flip', 'clean_label', 'none', 'diffusion_denoise'], default='none')
 parser.add_argument('--poisons_path', type=str, default=None)
 
 args = parser.parse_args()
 
-if args.cifar100:
-    CIFAR_CLASSES = 100
-    data_folder = 'cifar-100-python'
+if args.dset == 'cifar100':
+    TASK_CLASSES = 100
 else:
-    CIFAR_CLASSES = 10
-    data_folder = 'cifar-10-batches-py'
+    TASK_CLASSES = 10
 
 CIFAR_MEAN = [0.49139968, 0.48215827, 0.44653124]
 CIFAR_STD = [0.24703233, 0.24348505, 0.26158768]
+
+if args.track_grads:
+    full_arch_grad_history = []
+    full_param_grad_history = []
+else:
+    full_arch_grad_history = None
+    full_param_grad_history = None
 
 def main():
     if not torch.cuda.is_available():
@@ -77,22 +84,34 @@ def main():
     cudnn.enabled=True
     torch.cuda.manual_seed(args.seed)
     
-    if args.cifar100:
+    if args.dset == 'cifar100':
         train_transform, _ = pdarts_utils._data_transforms_cifar100(args)
+    elif args.dset == 'mnist':
+        train_transform, _ = pdarts_utils._data_transforms_mnist(args)
+    elif args.dset == 'fashion_mnist':
+        train_transform, _ = pdarts_utils._data_transforms_fashion_mnist(args)
+    elif args.dset == 'svhn':
+        train_transform, _ = pdarts_utils._data_transforms_svhn(args)
     else:
         train_transform, _ = pdarts_utils._data_transforms_cifar10(args)
 
     #  prepare dataset
     if args.poisons_type == 'none':
-        if args.cifar100:
+        if args.dset == 'cifar100':
             train_data = dset.CIFAR100(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        elif args.dset == 'mnist':
+            train_data = dset.MNIST(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        elif args.dset == 'fashion_mnist':
+            train_data = dset.FashionMNIST(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
+        elif args.dset == 'svhn':
+            train_data = dset.SVHN(root=args.tmp_data_dir, split='train', download=True, transform=train_transform)
         else:
             train_data = dset.CIFAR10(root=args.tmp_data_dir, train=True, download=True, transform=train_transform)
         
         n_poisons = 0
     else:
-        if args.cifar100:
-            raise ValueError('CIFAR100 not supported for poisoning')
+        if args.dset != 'cifar10':
+            raise ValueError('CIFAR10 and MNIST not supported for poisoning')
 
         train_kwargs = {
             'root': args.tmp_data_dir,
@@ -100,17 +119,31 @@ def main():
             'download': True,
             'transform': None
         }
-        # train_data = dset.CIFAR10(root=args.tmp_data_dir, train=True, download=True, transform=None)
 
         # Build poisoned dataset
         if args.poisons_type == 'label_flip':
             train_data = LabelFlippingPoisoningDataset(args.poisons_path, train_transform, train_kwargs)
+            n_poisons = train_data.get_num_poisons()
         elif args.poisons_type == 'clean_label':
             train_data = CleanLabelPoisoningDataset(args.poisons_path, train_transform, train_kwargs)
+            n_poisons = train_data.get_num_poisons()
+        elif args.poisons_type == 'diffusion_denoise':
+            sys.path.append('../diffusion_denoise')
+            from utils.datasets import _load_denoised_cifar
+            train_transform, _ = pdarts_utils._data_transforms_denoised_diffusion(augment=True, normalize=True)
+            train_data, _ = _load_denoised_cifar(
+                augment=True, 
+                datpath=args.poisons_path,
+                train_transform=train_transform
+            )
+
+            n_poisons = 0
+
+            # img = train_data[10][0]
+            # imshow(img, "TEST_PLS", denormalize=True)
+            # exit()
         else:
             raise ValueError('Unknown poisons type: {}'.format(args.poisons_type))
-        
-        n_poisons = train_data.get_num_poisons()
 
     # make save directory
     if n_poisons > 0:  
@@ -169,7 +202,7 @@ def main():
         drop_rate = [0.0, 0.0, 0.0]
     eps_no_archs = [10, 10, 10]
     for sp in range(len(num_to_keep)):
-        model = Network(args.init_channels + int(add_width[sp]), CIFAR_CLASSES, args.layers + int(add_layers[sp]), criterion, switches_normal=switches_normal, switches_reduce=switches_reduce, p=float(drop_rate[sp]))
+        model = Network(args.init_channels + int(add_width[sp]), TASK_CLASSES, args.layers + int(add_layers[sp]), criterion, switches_normal=switches_normal, switches_reduce=switches_reduce, p=float(drop_rate[sp]))
         model = nn.DataParallel(model)
         model = model.cuda()
         logging.info("param size = %fMB", pdarts_utils.count_parameters_in_MB(model))
@@ -198,11 +231,11 @@ def main():
             if epoch < eps_no_arch:
                 model.module.p = float(drop_rate[sp]) * (epochs - epoch - 1) / epochs
                 model.module.update_p()
-                train_acc, train_obj = train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=False)
+                train_acc, train_obj = train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=False, anti_search=args.anti_search)
             else:
                 model.module.p = float(drop_rate[sp]) * np.exp(-(epoch - eps_no_arch) * scale_factor) 
                 model.module.update_p()                
-                train_acc, train_obj = train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True)
+                train_acc, train_obj = train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True, anti_search=args.anti_search)
             scheduler.step()
             
             logging.info('Train_acc %f', train_acc)
@@ -314,11 +347,21 @@ def main():
                 genotype = parse_network(switches_normal, switches_reduce)
                 logging.info(genotype)              
 
-def train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True):
+def train(train_queue, valid_queue, model, network_params, criterion, optimizer, optimizer_a, lr, train_arch=True, anti_search=False):
     objs = pdarts_utils.AvgrageMeter()
     top1 = pdarts_utils.AvgrageMeter()
     top5 = pdarts_utils.AvgrageMeter()
     
+    if args.track_grads:
+        arch_grad_history = []
+        param_grad_history = []
+
+        for param in model.module.arch_parameters():
+            arch_grad_history.append(torch.zeros_like(param.data, device='cpu', requires_grad=False))
+        
+        for param in network_params:
+            param_grad_history.append(torch.zeros_like(param.data, device='cpu', requires_grad=False))
+
     for step, (input, target) in enumerate(train_queue):
         model.train()
         n = input.size(0)
@@ -337,9 +380,18 @@ def train(train_queue, valid_queue, model, network_params, criterion, optimizer,
             optimizer_a.zero_grad()
             logits = model(input_search)
             loss_a = criterion(logits, target_search)
+
+            if anti_search:
+                loss_a *= -1
+
             loss_a.backward()
             nn.utils.clip_grad_norm_(model.module.arch_parameters(), args.grad_clip)
             optimizer_a.step()
+
+            # add arch grads to history
+            if args.track_grads:
+                for i, param in enumerate(model.module.arch_parameters()):
+                    arch_grad_history[i] += param.grad.data.detach().clone().cpu()
 
         optimizer.zero_grad()
         logits = model(input)
@@ -349,6 +401,11 @@ def train(train_queue, valid_queue, model, network_params, criterion, optimizer,
         nn.utils.clip_grad_norm_(network_params, args.grad_clip)
         optimizer.step()
 
+        # add param grads to history
+        if args.track_grads:
+            for i, param in enumerate(network_params):
+                param_grad_history[i] += param.grad.data.detach().clone().cpu()
+
         prec1, prec5 = pdarts_utils.accuracy(logits, target, topk=(1, 5))
         objs.update(loss.data.item(), n)
         top1.update(prec1.data.item(), n)
@@ -356,6 +413,18 @@ def train(train_queue, valid_queue, model, network_params, criterion, optimizer,
 
         if step % args.report_freq == 0:
             logging.info('TRAIN Step: %03d Objs: %e R1: %f R5: %f', step, objs.avg, top1.avg, top5.avg)
+
+    # average arch params and save
+    if args.track_grads:
+        for i in range(len(arch_grad_history)):
+            arch_grad_history[i] /= len(train_queue)
+        full_arch_grad_history.append(arch_grad_history)
+        torch.save(full_arch_grad_history, os.path.join(args.save, 'arch_grads.pt'))
+
+        for i in range(len(param_grad_history)):
+            param_grad_history[i] /= len(train_queue)
+        full_param_grad_history.append(param_grad_history)
+        torch.save(full_param_grad_history, os.path.join(args.save, 'param_grads.pt'))
 
     return top1.avg, objs.avg
 

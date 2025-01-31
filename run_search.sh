@@ -18,7 +18,9 @@ python train_search.py \
        --dropout_rate 0.1 \
        --dropout_rate 0.4 \
        --dropout_rate 0.7 \
-       --note smartlf1 \
-       --poisons_type label_flip \
-       --poisons_path "/nfs/hpc/share/coalsonz/NAS-Poisoning-Dev/poisons/poisons/smart-lf/smart-lf-resnet18-cifar10-1.0%.pth" \
+       --note noise-diff-denoise4 \
+       --poisons_type diffusion_denoise \
+       --poisons_path '/nfs/hpc/share/coalsonz/NAS-Poisoning-Dev/diffusion_denoise/datasets/denoised/gc_cifar10/denoise_gaussian_noise/denoised_w_sigma_0.1.pt' \
+       --dset cifar10 \
+       # --track_grads \
        # --save_full_model \
